@@ -49,11 +49,20 @@ jobs:
       - name: Install Semgrep
         run: pip install "semgrep==1.145.0"    # pinned exactly — see R5.2
 
+      # A malformed rule is otherwise a mystery exit code, and a ruleset that silently
+      # stops matching is worse than no ruleset. This reports rule parse errors and proves
+      # the rules still fire on known-vulnerable code and stay quiet on the fixed version.
+      # Fully offline: no dependency on the rule registry being reachable.
+      - name: Semgrep — ruleset self-test against fixtures
+        run: python3 tests/check-ruleset.py
+
       - name: Semgrep — native application ruleset
         run: semgrep --config skills/semgrep-rules.yml --error --severity ERROR --metrics off .
 
+      # tests/fixtures/vulnerable is deliberately vulnerable — it is the ruleset's own
+      # regression corpus, scanned explicitly by the self-test step above.
       - name: Native configuration audit
-        run: node scripts/audit-native.mjs . --no-color
+        run: node scripts/audit-native.mjs . --exclude tests/fixtures --no-color
 
       - name: Electron-specific analysis
         run: |
@@ -81,18 +90,42 @@ jobs:
           node-version: '20'
 
       - name: Verify every declared dependency exists in its registry
-        run: node scripts/audit-native.mjs . --check-deps --no-color
+        run: node scripts/audit-native.mjs . --check-deps --exclude tests/fixtures --no-color
 
+      # A manifest without a lockfile means CI can resolve a version nobody reviewed.
+      # A repository with no manifest at all has nothing to check — that is not a failure.
       - name: Lockfile is authoritative
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci --ignore-scripts --dry-run
+          status=0
+          if [ -f package.json ]; then
+            if [ -f package-lock.json ]; then
+              npm ci --ignore-scripts --dry-run
+            elif [ -f yarn.lock ] || [ -f pnpm-lock.yaml ]; then
+              echo "Non-npm lockfile present; install with --frozen-lockfile / --immutable."
+            else
+              echo "package.json present with no lockfile — commit one (R5.2)."
+              status=1
+            fi
           else
-            echo "No package-lock.json — commit one (R5.2)." && exit 1
+            echo "No npm manifest in this repository — check not applicable."
           fi
+          if [ -f pubspec.yaml ] && [ ! -f pubspec.lock ]; then
+            echo "pubspec.yaml present with no pubspec.lock — commit one (R5.2)."
+            status=1
+          fi
+          if [ -f Podfile ] && [ ! -f Podfile.lock ]; then
+            echo "Podfile present with no Podfile.lock — commit one (R5.2)."
+            status=1
+          fi
+          exit $status
 
       - name: Known vulnerabilities
-        run: npm audit --audit-level=high || true   # advisory; tighten once the baseline is clean
+        run: |
+          if [ -f package-lock.json ]; then
+            npm audit --audit-level=high || true   # advisory; tighten once the baseline is clean
+          else
+            echo "No npm lockfile — audit not applicable."
+          fi
 
   # ---------------------------------------------------------------------------
   # Secret sweep across the working tree AND the full git history. A credential
@@ -113,7 +146,11 @@ jobs:
           curl -sSL -o gitleaks.tar.gz \
             https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
           tar -xzf gitleaks.tar.gz gitleaks
-          ./gitleaks detect --source . --redact --exit-code 1
+          if [ -f .gitleaks.toml ]; then
+            ./gitleaks detect --source . --config .gitleaks.toml --redact --exit-code 1
+          else
+            ./gitleaks detect --source . --redact --exit-code 1
+          fi
 
   # ---------------------------------------------------------------------------
   # Scan what you actually ship. Source scanning misses build-time injection.

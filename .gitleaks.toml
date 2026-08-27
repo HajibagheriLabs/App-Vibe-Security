@@ -1,0 +1,48 @@
+# gitleaks configuration for App-Vibe-Security
+#
+# This repository documents credential-exposure attacks, so it necessarily contains
+# credential-SHAPED strings: illustrative keys in the worked examples, extraction
+# commands in the modules, and the detection patterns themselves in skills/ and
+# scripts/. Every one is synthetic. None has ever been valid.
+#
+# The allowlist below is scoped to exactly those documentation and detector paths.
+# It does NOT weaken detection anywhere a real credential could plausibly land, and
+# it is deliberately narrow so that a genuine leak in this repository still fails CI.
+#
+# When you copy this workflow into your own application repository, DELETE this file.
+# Your repository has no reason to allowlist anything, and an inherited allowlist is
+# how a real secret gets waved through. See modules/03-binary-trust-and-gateways.md (R3.7).
+
+title = "App-Vibe-Security"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+Documentation and detector definitions. These files exist to SHOW credential patterns:
+vulnerable code samples, extraction commands, regex detectors, and redaction examples.
+Synthetic values only — every illustrative key is marked EXAMPLE or is a well-known
+vendor placeholder.
+"""
+targets = ["path"]
+paths = [
+  '''^examples/.*\.md$''',                 # side-by-side vulnerable vs. remediated code
+  '''^modules/.*\.md$''',                  # specifications, including extraction commands
+  '''^skills/audit-prompt\.md$''',         # audit prompt listing the patterns to search for
+  '''^skills/semgrep-rules\.yml$''',       # the detection regexes themselves
+  '''^scripts/audit-native\.mjs$''',       # ditto
+  '''^scripts/scan-artifacts\.mjs$''',     # ditto
+  '''^README\.md$''',                      # threat-model tables
+  '''^\.gitleaks\.toml$''',                # this file
+]
+
+[[allowlists]]
+description = "Values explicitly marked as synthetic, and documented vendor placeholders."
+targets = ["match"]
+regexTarget = "match"
+regexes = [
+  '''(?i)(example|sample|placeholder|dummy|fake|redacted|not-a-real|your[_-]?key|xxx+|<[a-z_-]+>)''',
+  '''AKIAIOSFODNN7EXAMPLE''',              # AWS' own published documentation key
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+]

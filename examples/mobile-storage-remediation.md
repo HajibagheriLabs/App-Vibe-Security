@@ -16,7 +16,7 @@ in every time" and to "call the AI API to summarize notes."
 // ✗ VULNERABLE
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_KEY = 'sk-proj-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6';   // ✗ ships in the bundle
+const API_KEY = 'sk-proj-EXAMPLE-NOT-A-REAL-KEY-000000000000';   // ✗ ships in the bundle
 
 export async function login(email: string, password: string) {
   const res = await fetch('https://api.example.com/login', {
@@ -84,11 +84,11 @@ adb backup -f out.ab com.example.app
 **3. Extract the API key from the bundle**, because it is a string literal:
 
 ```bash
-unzip -o app-release.apk -d out && strings out/assets/index.android.bundle | grep -o 'sk-proj-[A-Za-z0-9]*'
+unzip -o app-release.apk -d out && strings out/assets/index.android.bundle | grep -o 'sk-proj-[A-Za-z0-9-]*'
 ```
 
 ```
-sk-proj-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+sk-proj-EXAMPLE-NOT-A-REAL-KEY-000000000000
 ```
 
 The attacker now bills their own workload to the developer's account, at the developer's rate

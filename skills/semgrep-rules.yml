@@ -378,11 +378,16 @@ rules:
       - pattern-inside: |
           contextBridge.exposeInMainWorld(...)
       - pattern-either:
-          - pattern: ipcRenderer
-          - pattern: |
-              ($CH, ...$ARGS) => ipcRenderer.invoke($CH, ...$ARGS)
-          - pattern: |
-              ($CH, ...$ARGS) => ipcRenderer.send($CH, ...$ARGS)
+          # The ipcRenderer object itself handed across the bridge.
+          - pattern: '{..., ipcRenderer, ...}'
+          - pattern: '{..., $KEY: ipcRenderer, ...}'
+          # A generic passthrough: the renderer, not the preload, chooses the channel.
+          - pattern: '($CH, ...$ARGS) => ipcRenderer.invoke($CH, ...$ARGS)'
+          - pattern: '($CH, ...$ARGS) => ipcRenderer.send($CH, ...$ARGS)'
+          - pattern: '($CH, ...$ARGS) => ipcRenderer.$METHOD($CH, ...$ARGS)'
+      # Calling ipcRenderer with a CONSTANT channel name is the correct pattern and
+      # is not reported. Only exposing the object, or letting the caller name the
+      # channel, re-opens the full IPC surface.
 
   - id: avs-electron-ipc-command-execution
     languages: [javascript, typescript]
@@ -805,8 +810,8 @@ rules:
       confidence: MEDIUM
     pattern-regex: '(?i)(queryParams|searchParams|params|queryParameters|getQueryParameter\(|extras)[\.\[]?\s*["'']?(isAdmin|is_admin|role|isPremium|is_premium|isPro|entitlement|verified|is_verified|userId|user_id|uid|amount|price|total|token|access_token|auth|session|bypass|debug)["'']?\s*[\]\)]?'
 
-  - id: avs-deeplink-into-webview
-    languages: [javascript, typescript, dart]
+  - id: avs-deeplink-into-webview-js
+    languages: [javascript, typescript]
     severity: ERROR
     message: >-
       URL parameter loaded into a WebView. This renders an attacker-chosen page inside the trusted
@@ -822,11 +827,34 @@ rules:
     patterns:
       - pattern-either:
           - pattern: '<WebView source={{ uri: $URL }} />'
-          - pattern: 'WebView(initialUrl: $URL)'
           - pattern: $C.loadRequest($URL)
+          - pattern: $C.loadURL($URL)
       - metavariable-regex:
           metavariable: $URL
-          regex: '.*(param|query|route\.|props\.|widget\.|arg|url|link|redirect|returnTo|next).*'
+          regex: '.*(param|query|route\.|props\.|arg|url|link|redirect|returnTo|next).*'
+
+  - id: avs-deeplink-into-webview-dart
+    languages: [dart]
+    severity: ERROR
+    message: >-
+      URL parameter loaded into a WebView. This renders an attacker-chosen page inside the trusted
+      application chrome, where it inherits the session, the app identity, and any JavaScript
+      bridge. Resolve WebView destinations through an allowlist map keyed by identifier; never
+      accept a URL. See modules/04-deep-link-verification.md (R4.5).
+    metadata:
+      category: security
+      cwe: "CWE-601: URL Redirection to Untrusted Site"
+      masvs: "MASVS-PLATFORM-1"
+      module: "04-deep-link-verification"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: 'WebView(initialUrl: $URL)'
+          - pattern: '$C.loadRequest(Uri.parse($URL))'
+          - pattern: '$C.loadUrl($URL)'
+      - metavariable-regex:
+          metavariable: $URL
+          regex: '.*(param|query|route\.|widget\.|arg|url|link|redirect|returnTo|next).*'
 
   - id: avs-redirect-host-substring-check
     languages: [javascript, typescript, dart, kotlin, java, swift]
@@ -931,7 +959,7 @@ rules:
   # ==========================================================================
 
   - id: avs-update-feed-cleartext
-    languages: [javascript, typescript, generic]
+    languages: [javascript, typescript]
     severity: ERROR
     message: >-
       Auto-update feed over cleartext HTTP. Any network position then becomes code execution on
@@ -944,6 +972,27 @@ rules:
       module: "05-build-integrity-and-updates"
       confidence: HIGH
     pattern-regex: '(setFeedURL\s*\(\s*["'']?http://|url\s*:\s*["'']http://[^"'']*(update|release|latest|appcast))'
+
+  - id: avs-update-feed-cleartext-config
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Auto-update feed over cleartext HTTP in a packaging or update configuration file. Any network
+      position then becomes code execution on every installation. Use HTTPS and verify the package
+      signature before executing it. See modules/05-build-integrity-and-updates.md (R5.5).
+    metadata:
+      category: security
+      cwe: "CWE-494: Download of Code Without Integrity Check"
+      module: "05-build-integrity-and-updates"
+      confidence: HIGH
+    paths:
+      include:
+        - "*app-update.yml"
+        - "*electron-builder.yml"
+        - "*electron-builder.yaml"
+        - "*electron-builder.json"
+        - "*latest*.yml"
+    pattern-regex: '(url|provider|endpoint)\s*[:=]\s*["'']?http://'
 
   - id: avs-signing-material-in-repo
     languages: [generic]

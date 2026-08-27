@@ -11,6 +11,8 @@
  * Options:
  *   --check-deps     Verify every declared dependency exists in its live registry
  *                    (npm, pub.dev). Requires network access.
+ *   --exclude <p>    Skip paths containing this substring (repeatable, or comma-separated).
+ *                    Use for directories of deliberately vulnerable test fixtures.
  *   --json           Emit findings as JSON.
  *   --quiet          Suppress the passing-checks section.
  *   --no-color       Disable ANSI colour.
@@ -496,11 +498,19 @@ function mk(id, rule, severity, file, line, title, fix, rotate = false) {
   return { id, rule, severity, file, line, title, fix, rotate };
 }
 
+let EXCLUDES = [];
+function isExcluded(p) {
+  if (!EXCLUDES.length) return false;
+  const norm = p.split(sep).join('/');
+  return EXCLUDES.some((x) => norm.includes(x));
+}
+
 function walk(dir, acc = []) {
   let entries;
   try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return acc; }
   for (const e of entries) {
     const full = join(dir, e.name);
+    if (isExcluded(full)) continue;
     if (e.isDirectory()) {
       if (SKIP_DIRS.has(e.name) || e.name.startsWith('.') && e.name !== '.github') continue;
       walk(full, acc);
@@ -556,6 +566,7 @@ function report(findings, meta, opts) {
   console.log(c.bold('  App-Vibe-Security — native application audit'));
   console.log(c.dim(`  ${meta.root}`));
   console.log(c.dim(`  ${meta.fileCount} files scanned${meta.depsChecked ? `, ${meta.depsChecked} dependencies verified` : ''}`));
+  if (EXCLUDES.length) console.log(c.dim(`  excluded: ${EXCLUDES.join(', ')}`));
   console.log('');
 
   const groups = [['ERROR', errors, c.red], ['WARNING', warnings, c.yellow]];
@@ -607,10 +618,23 @@ function report(findings, meta, opts) {
 async function main() {
   const argv = process.argv.slice(2);
   const flags = new Set(argv.filter((a) => a.startsWith('--')));
-  const root = argv.find((a) => !a.startsWith('--')) || '.';
+
+  EXCLUDES = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--exclude' && argv[i + 1]) {
+      EXCLUDES.push(...argv[i + 1].split(',').map((x) => x.trim()).filter(Boolean));
+    }
+  }
+  const positional = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i].startsWith('--')) { if (argv[i] === '--exclude') i++; continue; }
+    if (argv[i - 1] === '--exclude') continue;
+    positional.push(argv[i]);
+  }
+  const root = positional[0] || '.';
 
   if (flags.has('--help') || flags.has('-h')) {
-    console.log('usage: node scripts/audit-native.mjs [path] [--check-deps] [--json] [--quiet] [--no-color]');
+    console.log('usage: node scripts/audit-native.mjs [path] [--check-deps] [--exclude <path>] [--json] [--quiet] [--no-color]');
     process.exit(0);
   }
   if (!existsSync(root)) {

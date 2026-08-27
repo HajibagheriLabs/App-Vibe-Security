@@ -1,0 +1,20 @@
+# Semgrep ignore list for App-Vibe-Security
+#
+# This repository IS a detector. scripts/audit-native.mjs and scripts/scan-artifacts.mjs
+# hold the regexes for the very patterns this ruleset looks for, so scanning them
+# reports the detector's own definitions as findings. skills/semgrep-rules.yml is the
+# ruleset itself, for the same reason.
+#
+# This is a self-reference exclusion, not a suppression: no application code is
+# excluded, and the ruleset is exercised against real fixtures in CI.
+#
+# When you copy this workflow into your own application repository, DELETE this file.
+# Your repository has no detector definitions to exclude, and an inherited ignore list
+# is how a real finding gets waved through.
+
+scripts/audit-native.mjs
+scripts/scan-artifacts.mjs
+skills/semgrep-rules.yml
+
+# Fixtures are scanned explicitly by the self-test step, not by the repository scan.
+tests/fixtures/

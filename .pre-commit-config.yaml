@@ -42,7 +42,7 @@ repos:
     hooks:
       - id: audit-native
         name: audit-native — manifests, plists, build config, Electron packaging
-        entry: node scripts/audit-native.mjs .
+        entry: node scripts/audit-native.mjs . --exclude tests/fixtures
         language: system
         pass_filenames: false
         always_run: true
@@ -51,7 +51,7 @@ repos:
       #   SKIP=verify-deps git commit ...     to skip
       - id: verify-deps
         name: verify-deps — confirm every declared package exists in its registry
-        entry: node scripts/audit-native.mjs . --check-deps --quiet
+        entry: node scripts/audit-native.mjs . --check-deps --exclude tests/fixtures --quiet
         language: system
         pass_filenames: false
         files: '(package\.json|pubspec\.yaml|Podfile|build\.gradle)$'

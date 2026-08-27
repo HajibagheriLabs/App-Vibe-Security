@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FIXTURE — deliberately vulnerable. Must be flagged by modules 01 and 03 rules. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application
+      android:allowBackup="true"
+      android:usesCleartextTraffic="true"
+      android:debuggable="true">
+    <activity android:name=".MainActivity" />
+  </application>
+</manifest>
