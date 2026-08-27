@@ -16,5 +16,7 @@ scripts/audit-native.mjs
 scripts/scan-artifacts.mjs
 skills/semgrep-rules.yml
 
-# Fixtures are scanned explicitly by the self-test step, not by the repository scan.
-tests/fixtures/
+# NOTE: tests/fixtures is deliberately NOT listed here. Semgrep applies .semgrepignore
+# even when a path is named explicitly on the command line, which would make the
+# ruleset self-test silently scan nothing. The repository scan excludes the fixtures
+# with `--exclude tests/fixtures` instead — see .github/workflows/security-audit.yml.

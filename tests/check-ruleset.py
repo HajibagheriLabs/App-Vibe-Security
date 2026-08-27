@@ -84,8 +84,22 @@ def main() -> int:
 
     failures = []
 
-    # --- The rules must fire ------------------------------------------------
+    # --- The scan must actually have looked at the fixtures -----------------
+    # An ignore file that matches the fixtures turns this whole check into a
+    # vacuous pass, which is the exact failure mode it exists to prevent.
     vuln = run_semgrep(VULNERABLE)
+    scanned = vuln.get("paths", {}).get("scanned", [])
+    print(f"scanned {len(scanned)} vulnerable fixture file(s)")
+    if not scanned:
+        print(
+            "FAIL: semgrep scanned no files under tests/fixtures/vulnerable. Something is "
+            "excluding them (.semgrepignore, .gitignore, or an --exclude flag). Semgrep "
+            "applies .semgrepignore even to paths named explicitly on the command line.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # --- The rules must fire ------------------------------------------------
     errs = rule_errors(vuln)
     for e in errs:
         print(f"RULE PARSE ERROR: {e}")

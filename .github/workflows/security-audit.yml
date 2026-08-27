@@ -57,7 +57,9 @@ jobs:
         run: python3 tests/check-ruleset.py
 
       - name: Semgrep — native application ruleset
-        run: semgrep --config skills/semgrep-rules.yml --error --severity ERROR --metrics off .
+        run: >-
+          semgrep --config skills/semgrep-rules.yml --error --severity ERROR
+          --metrics off --exclude tests/fixtures .
 
       # tests/fixtures/vulnerable is deliberately vulnerable — it is the ruleset's own
       # regression corpus, scanned explicitly by the self-test step above.
