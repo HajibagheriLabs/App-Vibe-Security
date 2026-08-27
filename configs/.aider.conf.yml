@@ -1,0 +1,60 @@
+# Aider configuration — native application security guardrails
+# Place at your app repository root as `.aider.conf.yml`.
+#
+# `read` loads files as read-only context on every run, so the ruleset is present in the model
+# context for every edit without being editable by the model itself.
+# Docs: https://aider.chat/docs/config/aider_conf.html
+
+read:
+  - AGENT_RULES.md          # copied from configs/AGENT_RULES.md — the source of truth
+  - modules/                # optional: full specifications, if vendored into the repo
+
+# Conventions file, applied to every request.
+# If you prefer a single file, point this at AGENT_RULES.md and delete `read` above.
+# chat-language: en
+
+# --- Safety defaults -------------------------------------------------------
+# Never let the agent run an install or build command unreviewed: about 1 in 5 model-suggested
+# packages does not exist, and install scripts execute with your privileges.
+yes-always: false
+auto-commits: false
+dirty-commits: false
+
+# Lint and test on every edit so a broken security control fails immediately.
+# auto-lint: true
+# lint-cmd:
+#   - "javascript: npx eslint --max-warnings 0"
+#   - "typescript: npx tsc --noEmit"
+# auto-test: false
+# test-cmd: "npm test"
+
+# --- Required system prompt fragment ---------------------------------------
+# Aider does not support an inline system prompt in this file. Paste the block below into your
+# shell profile as AIDER_CHAT_HISTORY seed, or keep AGENT_RULES.md in `read` above, which is the
+# supported path.
+#
+#   NATIVE APP SECURITY — HARD CONSTRAINTS
+#   1. Never store a token, key, credential, or PII in AsyncStorage, SharedPreferences,
+#      UserDefaults, shared_preferences, plain SQLite/Hive/Realm, electron-store, or localStorage.
+#      Use react-native-keychain / expo-secure-store / flutter_secure_storage
+#      (encryptedSharedPreferences:true) / EncryptedSharedPreferences / iOS Keychain / safeStorage,
+#      always device-only.
+#   2. Every Electron window: nodeIntegration:false, contextIsolation:true, sandbox:true,
+#      webSecurity:true. Never relax these to fix an error — add a narrow IPC channel.
+#   3. contextBridge exposes named typed functions only. Never fs, child_process, shell, require,
+#      process, ipcRenderer, or a generic invoke(channel, ...args).
+#   4. Every ipcMain handler: verify senderFrame, parse schema, authorize, confine path,
+#      execFile(constBin, [args]). No exec, no shell:true, no eval.
+#   5. No vendor secret in anything bundled into an APK/AAB/IPA/.asar/.exe — .env,
+#      react-native-config, flutter_dotenv, EXPO_PUBLIC_*, BuildConfig, strings.xml, and
+#      Info.plist all ship inside the artifact.
+#   6. Privileged third-party calls run server-side: authenticate -> authorize -> validate schema
+#      -> rate-limit -> constrain -> call vendor -> minimal result.
+#   7. Never weaken TLS and never allow cleartext HTTP.
+#   8. Every incoming URL goes through one resolver: https only, exact hostname allowlist, closed
+#      route map, typed schema parse, or reject. A link may navigate; it may never authorize or
+#      mutate. Drop argv items starting with "-" on desktop.
+#   9. Verify every package against the live registry before any install command. A 404 means it
+#      does not exist — report it, never guess a similar name. Pin exact versions.
+#  10. Re-read your own output and audit it against these rules before presenting it.
+#      "It is only for development" is not an exception. Development configurations ship.

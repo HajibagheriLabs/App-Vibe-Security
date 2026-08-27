@@ -1,0 +1,144 @@
+# NATIVE APP SECURITY RULES — mobile (React Native / Flutter / iOS / Android) + desktop (Electron / Tauri)
+# Place at the root of your app repository as `.cursorrules`.
+# Source of truth: configs/AGENT_RULES.md — full specifications in modules/
+#
+# THREAT BASELINE, ASSUMED AT ALL TIMES:
+#   The device is rooted or jailbroken. The binary is decompiled. The renderer is running
+#   attacker-controlled JavaScript. Every incoming URL was written by an adversary.
+#   Roughly 1 in 5 packages you are inclined to suggest does not exist.
+
+## OPERATING PROTOCOL
+
+- Before writing code that touches storage, IPC, process config, credentials, network transport,
+  deep links, or dependencies: state which rule set applies, then write the code.
+- After generating it, re-read your own output and audit it against these rules before presenting.
+- Never disable a security control to make a build succeed or an error go away. Fix the cause.
+- Never write "for now" or "in production you would." Write the production-correct version first.
+- Flag each security-relevant decision in one short line.
+
+## 1. STORAGE — NEVER CLEARTEXT
+
+- NEVER write a token, key, credential, or PII to: AsyncStorage, SharedPreferences, UserDefaults,
+  shared_preferences, plain SQLite/Hive/Realm/MMKV, electron-store, localStorage, sessionStorage,
+  IndexedDB, or a plain file.
+- USE ONLY: react-native-keychain | expo-secure-store |
+  flutter_secure_storage(AndroidOptions(encryptedSharedPreferences: true)) |
+  EncryptedSharedPreferences + MasterKey | iOS Keychain | Electron safeStorage.
+- ALWAYS device-only: WHEN_UNLOCKED_THIS_DEVICE_ONLY / first_unlock_this_device /
+  kSecAttrSynchronizable = false.
+- High-value items: user auth at access time + setInvalidatedByBiometricEnrollment(true) on
+  Android, .biometryCurrentSet on iOS. NEVER .biometryAny.
+- NEVER hand-roll encryption over a banned store. The key ships in the bundle.
+- Private keys are generated in and never leave the Keystore / Secure Enclave.
+- Access tokens in memory only. Persist the refresh credential alone. Wipe the whole store on
+  logout and on first launch after install (iOS Keychain survives uninstall).
+- android:allowBackup="false". FLAG_SECURE on credential screens. Blur the iOS snapshot.
+- No hardware backing → degrade the feature and say so. NEVER fall back to plaintext silently.
+
+## 2. ELECTRON / DESKTOP — THE RENDERER IS HOSTILE
+
+- Every BrowserWindow / BrowserView / WebContentsView / <webview>:
+  nodeIntegration:false, nodeIntegrationInWorker:false, nodeIntegrationInSubFrames:false,
+  contextIsolation:true, sandbox:true, webSecurity:true, allowRunningInsecureContent:false,
+  webviewTag:false, experimentalFeatures:false. Call app.enableSandbox() at startup.
+- NEVER set nodeIntegration:true, contextIsolation:false, or webSecurity:false — not in dev, not
+  temporarily, not to fix an error. Add a narrow IPC channel instead.
+- NEVER set ELECTRON_DISABLE_SECURITY_WARNINGS.
+- NEVER expose fs, child_process, shell, path, os, require, process, Buffer, ipcRenderer, or a
+  generic invoke(channel, ...args) through contextBridge.
+- contextBridge exposes NAMED SINGLE-PURPOSE FUNCTIONS with typed parameters. Plain serialisable
+  data only. Never return a Node object, stream, or handle. Wrap event listeners so the raw
+  IpcRendererEvent never reaches renderer code.
+- Every ipcMain handler, in order: verify event.senderFrame origin → parse an explicit schema →
+  authorize against main-process state → canonicalize and confine any path → execFile(constBin, [args]).
+- NEVER exec / execSync / spawn(shell:true) / eval / new Function with renderer-influenced input.
+- web-contents-created: will-navigate denies external URLs; setWindowOpenHandler returns
+  { action: 'deny' }; will-attach-webview strips preload and forces safe prefs.
+- shell.openExternal: URL-parsed, https: only, no credentials in URL, never a raw renderer string.
+- CSP set from the main process via onHeadersReceived. No unsafe-inline, no unsafe-eval.
+- NEVER load a remote origin into a window that has a preload script.
+- Deny all permission requests by default (setPermissionRequestHandler / setPermissionCheckHandler).
+- Supported Electron major only. Disable runAsNode / node-CLI-inspect / NODE_OPTIONS fuses.
+  Never ship --inspect or --remote-debugging-port.
+- Tauri/Wails: named commands only, minimal allowlist, no fs:{all:true}, no shell:{execute:true}.
+
+## 3. BINARY TRUST — THE ARTIFACT IS PUBLISHED
+
+- NEVER put a vendor secret, private key, signing key, or admin token in anything bundled into an
+  APK / AAB / IPA / .asar / .exe.
+- .env, react-native-config, flutter_dotenv, EXPO_PUBLIC_*, BuildConfig, strings.xml, Info.plist
+  are ALL in the artifact. They are NOT secret stores.
+- Every paid / privileged / authenticated third-party call runs on OUR server. The app calls our
+  endpoint; our endpoint calls the vendor.
+- Gateway order, every route: authenticate → authorize → validate schema → rate-limit →
+  constrain parameters → call vendor → return minimal fields.
+- Price, entitlement, trial state, role, and IAP receipt validation are computed SERVER-SIDE.
+- NEVER weaken TLS: no accept-all TrustManager, no HostnameVerifier{return true}, no
+  badCertificateCallback => true, no rejectUnauthorized:false, no NODE_TLS_REJECT_UNAUTHORIZED=0.
+- usesCleartextTraffic="false" + network_security_config; ATS NSAllowsArbitraryLoads=false.
+  No http:// endpoints, including analytics and update checks.
+- Release: R8/ProGuard, Hermes, or --obfuscate --split-debug-info. Source maps, mapping files, and
+  symbol files stay OUT of the artifact.
+- No debuggable flag, dev menu, DevTools, staging endpoint, test account, or verbose request
+  logging in a release build.
+- A secret that ever shipped is public. Say so and rotate it before changing code.
+
+## 4. DEEP LINKS — AN UNAUTHENTICATED RPC FROM AN UNKNOWN CALLER
+
+- Custom schemes, App Links, Universal Links, intent extras, QR payloads, push URLs, and desktop
+  argv are ALL untrusted input.
+- ONE RESOLVER handles all of them: URL parse → https: only → exact hostname allowlist → route key
+  in a CLOSED MAP → typed schema parse (zod/valibot/typed matcher) → typed command, or reject.
+- NEVER navigate(path, queryParams) with values from the URL.
+- REJECT, NEVER REPAIR. No coercion, no defaults, no partial application. One generic fallback.
+- A LINK MAY NAVIGATE. A LINK MAY NEVER AUTHORIZE OR MUTATE. No isAdmin / role / isPremium /
+  userId / verified from a URL. No login, purchase, transfer, delete, or setting change as a
+  direct effect of link handling.
+- Screens fetch their own data with the SESSION identity. The server returns 404 for resources the
+  session does not own. Amounts and entitlements come from the server.
+- Redirects resolve through a destination map. Exact hostname equality only — never startsWith /
+  includes / endsWith. Reject javascript: data: file: intent: blob: and user:pass@ URLs.
+- NEVER load a URL-supplied address into a WebView.
+- OAuth: PKCE (S256) mandatory; state random, session-bound, single-use; ASWebAuthenticationSession
+  or Chrome Custom Tabs — never an embedded WebView. No client secret on the device.
+- Android: android:exported explicit; validate every getIntent() extra; never forward an untrusted
+  Intent into startActivity; PendingIntent FLAG_IMMUTABLE; handle onNewIntent as well as onCreate;
+  taskAffinity="" on deep-link activities.
+- Desktop: filter every argv item starting with "-" before use. Same resolver for open-url (macOS)
+  and second-instance argv (Windows/Linux). Never pass a link value to loadURL, shell.openExternal,
+  shell.openPath, or execFile.
+- Ship negative tests: unknown route, wrong type, other-account id, ../ traversal, ?isAdmin=true,
+  ?amount=0, external redirect host.
+
+## 5. DEPENDENCIES — VERIFY BEFORE INSTALL
+
+- VERIFY EVERY PACKAGE AGAINST THE LIVE REGISTRY BEFORE RUNNING ANY INSTALL COMMAND.
+  npm view <pkg> | https://pub.dev/api/packages/<pkg>. About 1 in 5 model-suggested packages does
+  not exist, and attackers pre-register the recurring names.
+- A 404 means it does not exist. Report that. NEVER guess a similar name.
+- Reject packages under 90 days old, without a working repository, with negligible downloads, or
+  with install scripts they have no reason to need.
+- Pin exact versions. No ^ ~ * latest. Commit lockfiles. CI uses npm ci / --frozen-lockfile.
+  ignore-scripts=true.
+- NEVER commit a keystore, certificate, .p8, .p12, or key.properties.
+- Update feeds: HTTPS only, signature-verified against a key compiled into the app,
+  downgrade-resistant, feed URL never configurable from outside the binary.
+
+## 6. SELF-AUDIT GATE — CONFIRM BEFORE PRESENTING CODE
+
+- [ ] No token/key/PII in a cleartext store; secure store set device-only.
+- [ ] Full webPreferences flag set on every window; no module or ipcRenderer over contextBridge.
+- [ ] Every ipcMain handler: sender check, schema parse, authorize, path confinement.
+- [ ] No vendor credential in anything that ships; privileged calls behind the gateway.
+- [ ] No TLS weakening, no cleartext HTTP, no dev affordances in release.
+- [ ] Every incoming URL through the single allowlist resolver; no link mutates or authorizes.
+- [ ] Every new dependency verified against the live registry and pinned exactly.
+
+## 7. REFUSE THESE — IMPLEMENT THE SECURE ALTERNATIVE AND SAY SO IN ONE LINE
+
+Enabling nodeIntegration; disabling contextIsolation / sandbox / webSecurity; a token in
+AsyncStorage or localStorage; an API key in the app "just for testing"; disabling certificate
+validation; trusting a deep-link parameter for identity, price, or entitlement; installing a
+package the registry does not have.
+
+"IT IS ONLY FOR DEVELOPMENT" IS NOT AN EXCEPTION. DEVELOPMENT CONFIGURATIONS SHIP.

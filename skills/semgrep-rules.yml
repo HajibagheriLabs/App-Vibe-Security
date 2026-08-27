@@ -1,0 +1,966 @@
+# App-Vibe-Security — Semgrep AST ruleset for native applications
+#
+# Deterministic static detection for the vulnerability classes that dominate AI-generated
+# mobile (React Native, Flutter, iOS, Android) and desktop (Electron) applications.
+#
+#   Run:      semgrep --config skills/semgrep-rules.yml .
+#   CI gate:  semgrep --config skills/semgrep-rules.yml --error --severity ERROR .
+#   Baseline: semgrep --config skills/semgrep-rules.yml --baseline-commit <sha> .
+#   SARIF:    semgrep --config skills/semgrep-rules.yml --sarif -o results.sarif .
+#
+# Severity: ERROR blocks the build. WARNING requires review. INFO is advisory.
+#
+# Static analysis is a floor, not a ceiling. Pair with scripts/audit-native.mjs (manifest,
+# plist, and build configuration), scripts/scan-artifacts.mjs (built binaries), and the
+# adversarial review in skills/audit-prompt.md.
+
+rules:
+
+  # ==========================================================================
+  # MODULE 01 — HARDWARE-BACKED SECURE STORAGE
+  # ==========================================================================
+
+  - id: avs-asyncstorage-sensitive-key
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Sensitive value written to AsyncStorage. AsyncStorage is CLEARTEXT — on Android it is a
+      plain SQLite row, on iOS a plain file in the app sandbox. Any rooted or jailbroken device,
+      any backup extraction, and any local forensic tool reads it. Use react-native-keychain or
+      expo-secure-store with WHEN_UNLOCKED_THIS_DEVICE_ONLY. Encrypting it with a key held in the
+      bundle is not a fix. See modules/01-hardware-secure-storage.md (R1.2, R1.3).
+    metadata:
+      category: security
+      cwe: "CWE-312: Cleartext Storage of Sensitive Information"
+      owasp: "M9: Insecure Data Storage"
+      masvs: "MASVS-STORAGE-1"
+      module: "01-hardware-secure-storage"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: AsyncStorage.setItem($KEY, ...)
+          - pattern: AsyncStorage.mergeItem($KEY, ...)
+          - pattern: $STORE.setItem($KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i).*(token|jwt|auth|secret|password|passwd|credential|session|refresh|api[_-]?key|apikey|private[_-]?key|access[_-]?key|ssn|creditcard|card[_-]?number|cvv|pin|otp|totp|seed|mnemonic|passphrase|bearer).*'
+      - pattern-not-inside: |
+          import { ... } from 'react-native-keychain'
+          ...
+
+  - id: avs-asyncstorage-any-use
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      AsyncStorage write detected. AsyncStorage is cleartext and is acceptable ONLY for
+      non-sensitive preferences (theme, language, onboarding flag). Confirm the value is not a
+      token, key, credential, session identifier, or PII. If it is, migrate to
+      react-native-keychain / expo-secure-store. See modules/01-hardware-secure-storage.md (R1.1).
+    metadata:
+      category: security
+      cwe: "CWE-312: Cleartext Storage of Sensitive Information"
+      module: "01-hardware-secure-storage"
+      confidence: LOW
+    patterns:
+      - pattern-either:
+          - pattern: AsyncStorage.setItem(...)
+          - pattern: AsyncStorage.multiSet(...)
+          - pattern: AsyncStorage.mergeItem(...)
+
+  - id: avs-webstorage-sensitive-key
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Sensitive value written to localStorage / sessionStorage. In a WebView or an Electron
+      renderer this is a plain file on disk, readable by any process running as the user and by
+      any script that achieves injection in the same origin. Store the credential through the
+      platform secure store (Electron safeStorage, iOS Keychain, Android Keystore) and keep the
+      access token in memory. See modules/01-hardware-secure-storage.md (R1.2, R1.7).
+    metadata:
+      category: security
+      cwe: "CWE-522: Insufficiently Protected Credentials"
+      module: "01-hardware-secure-storage"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: localStorage.setItem($KEY, ...)
+          - pattern: sessionStorage.setItem($KEY, ...)
+          - pattern: window.localStorage.setItem($KEY, ...)
+          - pattern: window.sessionStorage.setItem($KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i).*(token|jwt|auth|secret|password|credential|session|refresh|api[_-]?key|apikey|bearer|private).*'
+
+  - id: avs-electron-store-plaintext
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      electron-store used for a credential. electron-store writes JSON to the userData directory;
+      its encryptionKey option is obfuscation, not encryption, because the key ships inside the
+      binary. Infostealer malware enumerates these paths by default. Use Electron safeStorage
+      (Keychain / DPAPI / libsecret) and refuse to persist when
+      safeStorage.isEncryptionAvailable() is false. See modules/01-hardware-secure-storage.md (R1.3).
+    metadata:
+      category: security
+      cwe: "CWE-312: Cleartext Storage of Sensitive Information"
+      module: "01-hardware-secure-storage"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: $STORE.set($KEY, ...)
+          - pattern: '$STORE.set({..., $KEY: ..., ...})'
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i).*(token|jwt|auth|secret|password|credential|session|refresh|api[_-]?key|apikey|bearer|licen[cs]e).*'
+      - pattern-inside: |
+          $STORE = new Store(...)
+          ...
+
+  - id: avs-flutter-shared-preferences-sensitive
+    languages: [dart]
+    severity: ERROR
+    message: >-
+      Sensitive value written to shared_preferences. shared_preferences is CLEARTEXT — an XML file
+      on Android and a plist on iOS, both readable from a rooted or jailbroken device and from
+      backups. Use flutter_secure_storage with
+      AndroidOptions(encryptedSharedPreferences: true) and
+      IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device).
+      See modules/01-hardware-secure-storage.md (R1.2, R1.3).
+    metadata:
+      category: security
+      cwe: "CWE-312: Cleartext Storage of Sensitive Information"
+      masvs: "MASVS-STORAGE-1"
+      module: "01-hardware-secure-storage"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $PREFS.setString($KEY, ...)
+          - pattern: $PREFS.setBool($KEY, ...)
+          - pattern: $PREFS.setInt($KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i).*(token|jwt|auth|secret|password|credential|session|refresh|api[_-]?key|apikey|bearer|private|pin|otp|seed|mnemonic|premium|entitle|licen[cs]e).*'
+
+  - id: avs-flutter-secure-storage-weak-android
+    languages: [dart]
+    severity: WARNING
+    message: >-
+      flutter_secure_storage used without AndroidOptions(encryptedSharedPreferences: true).
+      Without it the plugin may fall back to a weaker path on some Android versions. Set the
+      option explicitly, and set IOSOptions accessibility to first_unlock_this_device so the
+      item is not restored onto another device from a backup.
+      See modules/01-hardware-secure-storage.md (R1.3, R1.6).
+    metadata:
+      category: security
+      cwe: "CWE-311: Missing Encryption of Sensitive Data"
+      module: "01-hardware-secure-storage"
+      confidence: MEDIUM
+    patterns:
+      - pattern: FlutterSecureStorage()
+      - pattern-not-inside: |
+          FlutterSecureStorage(aOptions: ...)
+
+  - id: avs-android-sharedprefs-sensitive
+    languages: [java, kotlin]
+    severity: ERROR
+    message: >-
+      Sensitive value written to SharedPreferences. MODE_PRIVATE is process isolation, not
+      encryption — the XML file is plaintext on disk. Use
+      androidx.security.crypto.EncryptedSharedPreferences with a MasterKey (AES256_GCM,
+      StrongBox where available), or the Android Keystore directly.
+      See modules/01-hardware-secure-storage.md (R1.2, R1.3).
+    metadata:
+      category: security
+      cwe: "CWE-312: Cleartext Storage of Sensitive Information"
+      masvs: "MASVS-STORAGE-1"
+      module: "01-hardware-secure-storage"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $EDITOR.putString($KEY, ...)
+          - pattern: $EDITOR.putStringSet($KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i).*(token|jwt|auth|secret|password|credential|session|refresh|api[_-]?key|apikey|bearer|private|pin|otp|seed|mnemonic).*'
+
+  - id: avs-ios-userdefaults-sensitive
+    languages: [swift]
+    severity: ERROR
+    message: >-
+      Sensitive value written to UserDefaults. UserDefaults is a plist inside the app container,
+      included in device and iTunes backups and readable on a jailbroken device. Use Keychain
+      Services with kSecAttrAccessibleWhenUnlockedThisDeviceOnly and
+      kSecAttrSynchronizable = false. See modules/01-hardware-secure-storage.md (R1.2, R1.3, R1.6).
+    metadata:
+      category: security
+      cwe: "CWE-312: Cleartext Storage of Sensitive Information"
+      masvs: "MASVS-STORAGE-1"
+      module: "01-hardware-secure-storage"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: 'UserDefaults.standard.set($V, forKey: $KEY)'
+          - pattern: 'UserDefaults.standard.setValue($V, forKey: $KEY)'
+          - pattern: '$DEFAULTS.set($V, forKey: $KEY)'
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i)"?.*(token|jwt|auth|secret|password|credential|session|refresh|api[_-]?key|apikey|bearer|private|pin|otp|seed|mnemonic).*'
+
+  - id: avs-keychain-biometry-any
+    languages: [swift, javascript, typescript, kotlin, java]
+    severity: WARNING
+    message: >-
+      Biometric access control set to biometryAny / not invalidated on enrolment. A key protected
+      with .biometryAny (iOS) or without setInvalidatedByBiometricEnrollment(true) (Android)
+      survives an attacker enrolling their own fingerprint or face on an unlocked device — which
+      is exactly the attack. Use .biometryCurrentSet on iOS and
+      setInvalidatedByBiometricEnrollment(true) on Android.
+      See modules/01-hardware-secure-storage.md (R1.5).
+    metadata:
+      category: security
+      cwe: "CWE-287: Improper Authentication"
+      module: "01-hardware-secure-storage"
+      confidence: MEDIUM
+    pattern-regex: '(\.biometryAny|biometryAny|BIOMETRY_ANY|setInvalidatedByBiometricEnrollment\s*\(\s*false\s*\))'
+
+  - id: avs-handrolled-crypto-over-cleartext-store
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Application-level encryption used to make a cleartext store acceptable. The passphrase is
+      compiled into the bundle and is recovered by decompiling the artifact in minutes, so this
+      is equivalent to storing the value in plaintext. Move the value into the platform secure
+      store instead. See modules/01-hardware-secure-storage.md (R1.3) and
+      modules/03-binary-trust-and-gateways.md (R3.4).
+    metadata:
+      category: security
+      cwe: "CWE-321: Use of Hard-coded Cryptographic Key"
+      module: "01-hardware-secure-storage"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: CryptoJS.AES.encrypt($DATA, "...")
+          - pattern: CryptoJS.AES.encrypt($DATA, $K)
+          - pattern: crypto.createCipheriv($ALG, "...", ...)
+      - pattern-either:
+          - pattern-inside: |
+              ...
+              AsyncStorage.setItem(...)
+          - pattern-inside: |
+              ...
+              localStorage.setItem(...)
+
+  # ==========================================================================
+  # MODULE 02 — DESKTOP PROCESS ISOLATION
+  # ==========================================================================
+
+  - id: avs-electron-node-integration-enabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      nodeIntegration enabled. This grants renderer JavaScript direct access to Node.js
+      primitives, so ANY rendering-layer injection — a markdown preview, a chat message, a
+      synced title, model output — becomes remote code execution on the host. This is the
+      configuration behind CVE-2026-32626 (CVSS 9.6) and CVE-2026-33336. Set
+      nodeIntegration: false and add a narrow, parameter-validated IPC channel instead.
+      See modules/02-desktop-process-isolation.md (R2.1, R2.2).
+    metadata:
+      category: security
+      cwe: "CWE-1188: Insecure Default Initialization of Resource"
+      owasp: "A05:2021 Security Misconfiguration"
+      module: "02-desktop-process-isolation"
+      confidence: HIGH
+    pattern-regex: 'nodeIntegration(InWorker|InSubFrames)?\s*:\s*true'
+
+  - id: avs-electron-context-isolation-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      contextIsolation disabled. The preload script and the page then share one JavaScript
+      context, so renderer code can reach and rewrite anything the preload touches, including
+      prototypes of objects the main process trusts. contextIsolation: true is the default from
+      Electron 12 and must never be turned off.
+      See modules/02-desktop-process-isolation.md (R2.1, R2.2).
+    metadata:
+      category: security
+      cwe: "CWE-668: Exposure of Resource to Wrong Sphere"
+      module: "02-desktop-process-isolation"
+      confidence: HIGH
+    pattern-regex: 'contextIsolation\s*:\s*false'
+
+  - id: avs-electron-sandbox-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Renderer sandbox disabled. The OS-level sandbox is the last containment layer once
+      renderer content is compromised. Set sandbox: true on every window and call
+      app.enableSandbox() at startup so a window added later cannot forget it.
+      See modules/02-desktop-process-isolation.md (R2.1).
+    metadata:
+      category: security
+      cwe: "CWE-693: Protection Mechanism Failure"
+      module: "02-desktop-process-isolation"
+      confidence: HIGH
+    pattern-regex: 'sandbox\s*:\s*false'
+
+  - id: avs-electron-web-security-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      webSecurity disabled. This turns off the same-origin policy for the renderer, letting any
+      loaded content read local files and arbitrary origins. It is almost always added to silence
+      a CORS error during development — fix the server headers or proxy the request through the
+      main process instead. See modules/02-desktop-process-isolation.md (R2.1, R2.2).
+    metadata:
+      category: security
+      cwe: "CWE-346: Origin Validation Error"
+      module: "02-desktop-process-isolation"
+      confidence: HIGH
+    pattern-regex: '(webSecurity\s*:\s*false|allowRunningInsecureContent\s*:\s*true|experimentalFeatures\s*:\s*true)'
+
+  - id: avs-electron-security-warnings-disabled
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      ELECTRON_DISABLE_SECURITY_WARNINGS set. Those warnings are the only in-band signal that a
+      window is misconfigured. Remove the suppression and fix what it is hiding.
+      See modules/02-desktop-process-isolation.md (R2.2).
+    metadata:
+      category: security
+      cwe: "CWE-778: Insufficient Logging"
+      module: "02-desktop-process-isolation"
+      confidence: HIGH
+    pattern-regex: 'ELECTRON_DISABLE_SECURITY_WARNINGS'
+
+  - id: avs-contextbridge-exposes-node-module
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      contextBridge exposes a Node module or a raw capability to the renderer. Context isolation
+      does not stop the renderer from calling a function the preload deliberately handed it —
+      exposing fs, child_process, shell, path, os, require, process, or Buffer is equivalent to
+      nodeIntegration: true with one extra indirection. Expose named single-purpose functions
+      with typed parameters instead, and make the privileged decision in the main process.
+      See modules/02-desktop-process-isolation.md (R2.3).
+    metadata:
+      category: security
+      cwe: "CWE-829: Inclusion of Functionality from an Untrusted Control Sphere"
+      module: "02-desktop-process-isolation"
+      confidence: HIGH
+    patterns:
+      - pattern-inside: |
+          contextBridge.exposeInMainWorld(...)
+      - pattern-either:
+          - pattern: require($MOD)
+          - pattern: $OBJ.exec
+          - pattern: $OBJ.execSync
+          - pattern: $OBJ.spawn
+          - pattern: $OBJ.readFileSync
+          - pattern: $OBJ.writeFileSync
+          - pattern: $OBJ.openExternal
+          - pattern: process
+          - pattern: Buffer
+
+  - id: avs-contextbridge-exposes-ipcrenderer
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      contextBridge exposes ipcRenderer or a generic invoke/send passthrough. This re-exposes the
+      ENTIRE IPC surface to the renderer, including every handler any contributor adds later, and
+      leaks event.sender to renderer code. Expose one named function per business operation.
+      See modules/02-desktop-process-isolation.md (R2.3).
+    metadata:
+      category: security
+      cwe: "CWE-749: Exposed Dangerous Method or Function"
+      module: "02-desktop-process-isolation"
+      confidence: HIGH
+    patterns:
+      - pattern-inside: |
+          contextBridge.exposeInMainWorld(...)
+      - pattern-either:
+          - pattern: ipcRenderer
+          - pattern: |
+              ($CH, ...$ARGS) => ipcRenderer.invoke($CH, ...$ARGS)
+          - pattern: |
+              ($CH, ...$ARGS) => ipcRenderer.send($CH, ...$ARGS)
+
+  - id: avs-electron-ipc-command-execution
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Shell or dynamic code execution reachable from an IPC handler. A compromised renderer calls
+      this directly. Use execFile with a constant binary path and an argument array, never exec,
+      execSync, spawn with shell: true, eval, or new Function, and never build a command string
+      from IPC payload data. See modules/02-desktop-process-isolation.md (R2.4, R2.10).
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+      owasp: "A03:2021 Injection"
+      module: "02-desktop-process-isolation"
+      confidence: MEDIUM
+    patterns:
+      - pattern-inside: |
+          ipcMain.$HANDLER($CHANNEL, function $F(...) {...})
+      - pattern-either:
+          - pattern: exec(...)
+          - pattern: execSync(...)
+          - pattern: $CP.exec(...)
+          - pattern: $CP.execSync(...)
+          - pattern: '$CP.spawn($BIN, ..., {..., shell: true, ...})'
+          - pattern: eval(...)
+          - pattern: new Function(...)
+
+  - id: avs-electron-window-open-allowed
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      setWindowOpenHandler returns allow. A child window created by an untrusted renderer
+      inherits process permissions from its opener — the CVE-2026-34765 class. Return
+      { action: 'deny' } by default and route genuine external links through a validated
+      shell.openExternal. If a child window is truly required, restate the full webPreferences
+      block in overrideBrowserWindowOptions rather than relying on inheritance.
+      See modules/02-desktop-process-isolation.md (R2.5).
+    metadata:
+      category: security
+      cwe: "CWE-1021: Improper Restriction of Rendered UI Layers"
+      module: "02-desktop-process-isolation"
+      confidence: MEDIUM
+    patterns:
+      - pattern-inside: |
+          $WC.setWindowOpenHandler(...)
+      - pattern: |
+          {..., action: 'allow', ...}
+      - pattern-not: |
+          {..., action: 'allow', overrideBrowserWindowOptions: {...}, ...}
+
+  - id: avs-electron-open-external-untrusted
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      shell.openExternal called with a non-literal value. openExternal hands the string to the
+      OS handler resolver — on Windows a file: URL to an .exe/.bat/.lnk or a UNC path executes
+      it. Parse with the URL constructor, require protocol === 'https:', reject credentials in
+      the URL, and prefer an allowlist keyed by identifier.
+      See modules/02-desktop-process-isolation.md (R2.6).
+    metadata:
+      category: security
+      cwe: "CWE-749: Exposed Dangerous Method or Function"
+      module: "02-desktop-process-isolation"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: shell.openExternal($URL, ...)
+          - pattern: shell.openPath($URL, ...)
+      - pattern-not: shell.openExternal("...", ...)
+      - pattern-not: shell.openPath("...", ...)
+
+  - id: avs-electron-loads-remote-origin
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Window loads a remote origin. If this window has a preload script attached, remote content
+      plus a privileged bridge is the same vulnerability as nodeIntegration: true with one extra
+      indirection. Load application content from a local file or a registered custom scheme, and
+      confirm this URL is a fixed allowlisted origin with no preload.
+      See modules/02-desktop-process-isolation.md (R2.7).
+    metadata:
+      category: security
+      cwe: "CWE-829: Inclusion of Functionality from an Untrusted Control Sphere"
+      module: "02-desktop-process-isolation"
+      confidence: LOW
+    patterns:
+      - pattern-either:
+          - pattern: $WIN.loadURL("=~/^https?:\\/\\//")
+          - pattern: $WIN.webContents.loadURL("=~/^https?:\\/\\//")
+
+  - id: avs-electron-fuses-unsafe
+    languages: [javascript, typescript, json]
+    severity: WARNING
+    message: >-
+      Electron fuse left enabled. With runAsNode, node CLI inspect arguments, or the NODE_OPTIONS
+      environment variable enabled, your signed and trusted application binary doubles as a
+      general-purpose Node interpreter for any local attacker. Disable runAsNode,
+      enableNodeCliInspectArguments, and enableNodeOptionsEnvironmentVariable, and enable
+      onlyLoadAppFromAsar and ASAR integrity validation.
+      See modules/02-desktop-process-isolation.md (R2.9).
+    metadata:
+      category: security
+      cwe: "CWE-489: Active Debug Code"
+      module: "02-desktop-process-isolation"
+      confidence: MEDIUM
+    pattern-regex: '(runAsNode\s*[:=]\s*true|enableNodeCliInspectArguments\s*[:=]\s*true|enableNodeOptionsEnvironmentVariable\s*[:=]\s*true|onlyLoadAppFromAsar\s*[:=]\s*false)'
+
+  - id: avs-electron-remote-debugging-enabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Remote debugging or inspector enabled. A debugging port is a full code-execution channel
+      reachable by any local process and, through DNS rebinding, by a web page. Never ship
+      --inspect, --remote-debugging-port, or an automatic openDevTools in a production build.
+      See modules/02-desktop-process-isolation.md (R2.9).
+    metadata:
+      category: security
+      cwe: "CWE-489: Active Debug Code"
+      module: "02-desktop-process-isolation"
+      confidence: MEDIUM
+    pattern-regex: '(--remote-debugging-port|--inspect(-brk)?[= ]|appendSwitch\(\s*.remote-debugging-port)'
+
+  - id: avs-tauri-allowlist-overbroad
+    languages: [json]
+    severity: ERROR
+    message: >-
+      Tauri allowlist grants blanket filesystem or shell capability. fs all, shell execute, and
+      shell open are the Tauri equivalent of nodeIntegration: true. Expose named commands with
+      typed parameters and scope any filesystem access to a specific directory.
+      See modules/02-desktop-process-isolation.md (R2.11).
+    metadata:
+      category: security
+      cwe: "CWE-732: Incorrect Permission Assignment for Critical Resource"
+      module: "02-desktop-process-isolation"
+      confidence: MEDIUM
+    paths:
+      include:
+        - "*tauri.conf.json"
+    pattern-regex: '"(all|execute|sidecar)"\s*:\s*true'
+
+  # ==========================================================================
+  # MODULE 03 — BINARY TRUST AND BACKEND GATEWAYS
+  # ==========================================================================
+
+  - id: avs-hardcoded-vendor-secret
+    languages: [javascript, typescript, dart, kotlin, java, swift]
+    severity: ERROR
+    message: >-
+      Vendor credential literal in application source. This string is compiled into the shipped
+      APK / IPA / asar / executable and is recovered with unzip and strings in seconds. Move the
+      operation behind an authenticated backend gateway, and ROTATE THIS KEY NOW — if it has ever
+      been in a published build it is already public. See modules/03-binary-trust-and-gateways.md
+      (R3.1, R3.2, R3.7).
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      owasp: "M1: Improper Credential Usage"
+      masvs: "MASVS-CODE-4"
+      module: "03-binary-trust-and-gateways"
+      confidence: HIGH
+    pattern-regex: '(sk_live_[0-9a-zA-Z]{16,}|sk_test_[0-9a-zA-Z]{16,}|rk_live_[0-9a-zA-Z]{16,}|sk-[A-Za-z0-9_-]{32,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|SG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}|-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----|eyJhbGciOi[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}\.)'
+
+  - id: avs-secret-assigned-to-constant
+    languages: [javascript, typescript, dart, kotlin, java, swift]
+    severity: WARNING
+    message: >-
+      A constant named like a secret is assigned a long literal. Every string in a mobile or
+      desktop artifact is public — the binary is distributed to the attacker. If this value
+      authorizes anything, move it behind a server gateway and rotate it. If it is genuinely a
+      public identifier (publishable key, public client id), rename it so the next reader knows.
+      See modules/03-binary-trust-and-gateways.md (R3.1).
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      module: "03-binary-trust-and-gateways"
+      confidence: LOW
+    pattern-regex: '(?i)(api[_-]?key|apikey|secret|secret[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|master[_-]?key|signing[_-]?key|password)\s*[:=]\s*["'']{1}[A-Za-z0-9_\-\/\+=]{20,}["'']{1}'
+
+  - id: avs-expo-public-env-holds-secret
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Secret referenced through a PUBLIC build-time environment prefix. EXPO_PUBLIC_ and
+      REACT_APP_ variables are inlined as literal strings into the JavaScript bundle that ships
+      inside the APK and IPA. This credential is public the moment you release. Move the call to
+      a server route and rotate the key. See modules/03-binary-trust-and-gateways.md (R3.1, R3.2).
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      module: "03-binary-trust-and-gateways"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: process.env.$VAR
+          - pattern: import.meta.env.$VAR
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: '^(EXPO_PUBLIC_|REACT_APP_|NEXT_PUBLIC_|VITE_|PUBLIC_).*(SECRET|PRIVATE|SERVICE_ROLE|PASSWORD|CREDENTIAL|ACCESS_TOKEN|REFRESH_TOKEN|CLIENT_SECRET|SIGNING|WEBHOOK|MASTER|ADMIN|API_SECRET|SECRET_KEY|PRIVATE_KEY)'
+
+  - id: avs-dotenv-bundled-into-artifact
+    languages: [dart, javascript, typescript]
+    severity: WARNING
+    message: >-
+      A dotenv loader is used in a client application. flutter_dotenv bundles the .env file as an
+      ASSET and react-native-config writes values into BuildConfig and Info.plist — both are
+      recovered by unzipping the artifact. These are not secret stores. Only non-sensitive
+      configuration may travel this way. See modules/03-binary-trust-and-gateways.md (R3.1).
+    metadata:
+      category: security
+      cwe: "CWE-540: Inclusion of Sensitive Information in Source Code"
+      module: "03-binary-trust-and-gateways"
+      confidence: MEDIUM
+    pattern-regex: '(dotenv\.load\(|flutter_dotenv|react-native-config|react-native-dotenv|Config\.[A-Z_]{4,})'
+
+  - id: avs-tls-validation-disabled-js
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      TLS certificate validation disabled. This converts every network on the path into a
+      man-in-the-middle position, exposing every token and every request body. It is typically
+      added to silence a local development certificate error, and it ships. Fix the certificate
+      chain instead. See modules/03-binary-trust-and-gateways.md (R3.5).
+    metadata:
+      category: security
+      cwe: "CWE-295: Improper Certificate Validation"
+      owasp: "M5: Insecure Communication"
+      masvs: "MASVS-NETWORK-1"
+      module: "03-binary-trust-and-gateways"
+      confidence: HIGH
+    pattern-regex: '(rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED\s*[=:]\s*["'']?0|strictSSL\s*:\s*false|checkServerIdentity\s*:\s*\(\s*\)\s*=>\s*(undefined|null|true))'
+
+  - id: avs-tls-validation-disabled-dart
+    languages: [dart]
+    severity: ERROR
+    message: >-
+      badCertificateCallback accepts every certificate. This disables TLS authentication for the
+      whole client and exposes every request to interception. Remove it; if you need to trust a
+      development CA, install it on the test device instead.
+      See modules/03-binary-trust-and-gateways.md (R3.5).
+    metadata:
+      category: security
+      cwe: "CWE-295: Improper Certificate Validation"
+      masvs: "MASVS-NETWORK-1"
+      module: "03-binary-trust-and-gateways"
+      confidence: HIGH
+    pattern-regex: 'badCertificateCallback\s*=\s*\(?[^)]*\)?\s*=>\s*true'
+
+  - id: avs-tls-validation-disabled-android
+    languages: [java, kotlin]
+    severity: ERROR
+    message: >-
+      TrustManager or HostnameVerifier accepts everything. An empty checkServerTrusted or a
+      HostnameVerifier returning true disables certificate authentication, exposing every session
+      token to any network attacker. Use the platform default trust store, and pin with
+      network_security_config or OkHttp CertificatePinner where the data justifies it.
+      See modules/03-binary-trust-and-gateways.md (R3.5).
+    metadata:
+      category: security
+      cwe: "CWE-295: Improper Certificate Validation"
+      masvs: "MASVS-NETWORK-1"
+      module: "03-binary-trust-and-gateways"
+      confidence: HIGH
+    pattern-regex: '(checkServerTrusted\s*\([^)]*\)\s*(throws\s+CertificateException\s*)?\{\s*\}|ALLOW_ALL_HOSTNAME_VERIFIER|verify\s*\([^)]*\)\s*(:\s*Boolean\s*)?\{\s*return\s+true\s*;?\s*\}|HostnameVerifier\s*\{\s*_?,?\s*_?\s*->\s*true\s*\})'
+
+  - id: avs-cleartext-http-endpoint
+    languages: [javascript, typescript, dart, kotlin, java, swift]
+    severity: WARNING
+    message: >-
+      Cleartext http:// endpoint. Every request and response on this path is readable and
+      modifiable in transit, including analytics payloads and update checks. Use https, and set
+      usesCleartextTraffic="false" plus ATS NSAllowsArbitraryLoads=false so the platform enforces
+      it. See modules/03-binary-trust-and-gateways.md (R3.5).
+    metadata:
+      category: security
+      cwe: "CWE-319: Cleartext Transmission of Sensitive Information"
+      masvs: "MASVS-NETWORK-1"
+      module: "03-binary-trust-and-gateways"
+      confidence: MEDIUM
+    pattern-regex: '["'']http://(?!localhost|127\.0\.0\.1|10\.0\.2\.2|0\.0\.0\.0|\[::1\])[a-zA-Z0-9]'
+
+  - id: avs-client-side-price-or-entitlement
+    languages: [javascript, typescript, dart]
+    severity: WARNING
+    message: >-
+      Price, total, or entitlement computed on the client. The binary is patchable and the API is
+      callable directly with curl, so any value the client computes is a value the attacker
+      chooses. Compute it server-side and have the client display the server response.
+      See modules/03-binary-trust-and-gateways.md (R3.2).
+    metadata:
+      category: security
+      cwe: "CWE-602: Client-Side Enforcement of Server-Side Security"
+      module: "03-binary-trust-and-gateways"
+      confidence: LOW
+    pattern-regex: '(?i)(const|let|var|final)\s+(total|amount|price|discount|subtotal|isPremium|isPro|hasSubscription|isAdmin|entitlement)\s*[:=]'
+
+  - id: avs-android-debuggable-release
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      android:debuggable="true" in a manifest. A debuggable release build lets any user attach a
+      debugger, run as the app UID, and read the entire private data directory with adb run-as.
+      Remove it. See modules/03-binary-trust-and-gateways.md (R3.6).
+    metadata:
+      category: security
+      cwe: "CWE-489: Active Debug Code"
+      module: "03-binary-trust-and-gateways"
+      confidence: HIGH
+    paths:
+      include:
+        - "*AndroidManifest.xml"
+    pattern-regex: 'android:debuggable\s*=\s*"true"'
+
+  - id: avs-android-cleartext-traffic-enabled
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Cleartext HTTP permitted in the Android manifest or network security configuration. Set
+      android:usesCleartextTraffic="false" and cleartextTrafficPermitted="false" in the base
+      configuration. Do not rely on a debug-overrides block — release builds inherit the base.
+      See modules/03-binary-trust-and-gateways.md (R3.5).
+    metadata:
+      category: security
+      cwe: "CWE-319: Cleartext Transmission of Sensitive Information"
+      masvs: "MASVS-NETWORK-1"
+      module: "03-binary-trust-and-gateways"
+      confidence: HIGH
+    paths:
+      include:
+        - "*AndroidManifest.xml"
+        - "*network_security_config.xml"
+    pattern-regex: '(android:usesCleartextTraffic\s*=\s*"true"|cleartextTrafficPermitted\s*=\s*"true")'
+
+  - id: avs-android-allow-backup-enabled
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      android:allowBackup="true". The application private directory can then be lifted off the
+      device through adb backup and through cloud backup channels, and restored onto an
+      attacker-controlled device. Set allowBackup="false", or supply dataExtractionRules that
+      exclude every store holding credentials. See modules/01-hardware-secure-storage.md (R1.6).
+    metadata:
+      category: security
+      cwe: "CWE-530: Exposure of Backup File to Unauthorized Control Sphere"
+      masvs: "MASVS-STORAGE-2"
+      module: "01-hardware-secure-storage"
+      confidence: MEDIUM
+    paths:
+      include:
+        - "*AndroidManifest.xml"
+    pattern-regex: 'android:allowBackup\s*=\s*"true"'
+
+  - id: avs-ios-ats-disabled
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      App Transport Security disabled (NSAllowsArbitraryLoads). This permits cleartext HTTP and
+      weakened TLS for the whole application. Remove the exception; if a single legacy host truly
+      requires it, scope it with NSExceptionDomains and document the removal date.
+      See modules/03-binary-trust-and-gateways.md (R3.5).
+    metadata:
+      category: security
+      cwe: "CWE-319: Cleartext Transmission of Sensitive Information"
+      masvs: "MASVS-NETWORK-1"
+      module: "03-binary-trust-and-gateways"
+      confidence: HIGH
+    paths:
+      include:
+        - "*Info.plist"
+        - "*.plist"
+    pattern-regex: '<key>NSAllowsArbitraryLoads(InWebContent|ForMedia)?</key>\s*<true/>'
+
+  # ==========================================================================
+  # MODULE 04 — DEEP LINK VERIFICATION
+  # ==========================================================================
+
+  - id: avs-deeplink-unvalidated-navigation
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Deep link parameters routed straight into navigation. Every value here is attacker-supplied
+      — a web page, an SMS, a QR code, or a malicious app on the same device can originate this
+      URL. Resolve through ONE validator: URL parse, https only, exact hostname allowlist, route
+      key in a closed map, typed schema parse (zod/valibot), or reject.
+      See modules/04-deep-link-verification.md (R4.3).
+    metadata:
+      category: security
+      cwe: "CWE-939: Improper Authorization in Handler for Custom URL Scheme"
+      owasp: "M4: Insufficient Input/Output Validation"
+      masvs: "MASVS-PLATFORM-3"
+      module: "04-deep-link-verification"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              Linking.addEventListener('url', ...)
+          - pattern-inside: |
+              Linking.getInitialURL().then(...)
+          - pattern-inside: |
+              $H = ({ url: $U }) => {...}
+      - pattern-either:
+          - pattern: $NAV.navigate($ROUTE, $PARAMS)
+          - pattern: $NAV.push($ROUTE, $PARAMS)
+          - pattern: $NAV.replace($ROUTE, $PARAMS)
+          - pattern: navigation.navigate(...)
+
+  - id: avs-deeplink-grants-authority
+    languages: [javascript, typescript, dart, kotlin, java, swift]
+    severity: ERROR
+    message: >-
+      Identity, role, entitlement, price, or a token read from URL parameters. A link may
+      navigate; it may NEVER authorize or mutate. The attacker writes the URL, so this value is
+      whatever they choose. Fetch the authoritative value from the server using the SESSION
+      identity, and require an explicit, server-authorized user action for any state change.
+      See modules/04-deep-link-verification.md (R4.4).
+    metadata:
+      category: security
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      owasp: "M3: Insecure Authentication/Authorization"
+      module: "04-deep-link-verification"
+      confidence: MEDIUM
+    pattern-regex: '(?i)(queryParams|searchParams|params|queryParameters|getQueryParameter\(|extras)[\.\[]?\s*["'']?(isAdmin|is_admin|role|isPremium|is_premium|isPro|entitlement|verified|is_verified|userId|user_id|uid|amount|price|total|token|access_token|auth|session|bypass|debug)["'']?\s*[\]\)]?'
+
+  - id: avs-deeplink-into-webview
+    languages: [javascript, typescript, dart]
+    severity: ERROR
+    message: >-
+      URL parameter loaded into a WebView. This renders an attacker-chosen page inside the trusted
+      application chrome, where it inherits the session, the app identity, and any JavaScript
+      bridge. Resolve WebView destinations through an allowlist map keyed by identifier; never
+      accept a URL. See modules/04-deep-link-verification.md (R4.5).
+    metadata:
+      category: security
+      cwe: "CWE-601: URL Redirection to Untrusted Site"
+      masvs: "MASVS-PLATFORM-1"
+      module: "04-deep-link-verification"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: '<WebView source={{ uri: $URL }} />'
+          - pattern: 'WebView(initialUrl: $URL)'
+          - pattern: $C.loadRequest($URL)
+      - metavariable-regex:
+          metavariable: $URL
+          regex: '.*(param|query|route\.|props\.|widget\.|arg|url|link|redirect|returnTo|next).*'
+
+  - id: avs-redirect-host-substring-check
+    languages: [javascript, typescript, dart, kotlin, java, swift]
+    severity: ERROR
+    message: >-
+      Redirect or origin check performed with a substring test. startsWith, includes, endsWith,
+      and loose regexes on a URL string are all bypassable — evil-example.com,
+      example.com.evil.tld, and https://example.com@evil.tld each defeat them. Parse with the URL
+      API and compare url.hostname for EXACT equality against an allowlist.
+      See modules/04-deep-link-verification.md (R4.5).
+    metadata:
+      category: security
+      cwe: "CWE-601: URL Redirection to Untrusted Site"
+      module: "04-deep-link-verification"
+      confidence: MEDIUM
+    pattern-regex: '(?i)\b\w*(url|uri|host|origin|redirect|returnto|callback|next)\w*\s*\.\s*(startsWith|endsWith|includes|contains|hasPrefix|hasSuffix)\s*\('
+
+  - id: avs-android-intent-redirection
+    languages: [java, kotlin]
+    severity: ERROR
+    message: >-
+      Untrusted Intent parsed or forwarded. Intent.parseUri and forwarding an Intent received in
+      an extra let an external application launch your non-exported components with your
+      privileges (implicit intent redirection). Never construct an Intent from external data;
+      switch on a validated identifier and build the Intent explicitly.
+      See modules/04-deep-link-verification.md (R4.6).
+    metadata:
+      category: security
+      cwe: "CWE-926: Improper Export of Android Application Components"
+      masvs: "MASVS-PLATFORM-1"
+      module: "04-deep-link-verification"
+      confidence: HIGH
+    pattern-regex: '(Intent\.parseUri\(|getParcelableExtra\([^)]*\)\s*as\s*Intent|\(Intent\)\s*\w+\.getParcelableExtra\()'
+
+  - id: avs-pendingintent-mutable
+    languages: [java, kotlin]
+    severity: WARNING
+    message: >-
+      PendingIntent created without FLAG_IMMUTABLE. A mutable PendingIntent can be filled in by
+      whichever application receives it, letting it act with your application identity. Use
+      FLAG_IMMUTABLE, or FLAG_MUTABLE only with a fully specified explicit component.
+      See modules/04-deep-link-verification.md (R4.6).
+    metadata:
+      category: security
+      cwe: "CWE-927: Use of Implicit Intent for Sensitive Communication"
+      module: "04-deep-link-verification"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: PendingIntent.getActivity(...)
+          - pattern: PendingIntent.getService(...)
+          - pattern: PendingIntent.getBroadcast(...)
+      - pattern-not-regex: 'FLAG_IMMUTABLE'
+
+  - id: avs-desktop-argv-deeplink-unfiltered
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Command-line arguments consumed without filtering switches. On Windows and Linux a
+      registered protocol delivers the deep link as argv, so a web page that triggers your
+      protocol can inject Chromium and Node switches — --gpu-launcher, --inspect, --no-sandbox —
+      straight into the trusted main process. Drop every argument beginning with "-", then run
+      the remaining value through the same URL resolver.
+      See modules/04-deep-link-verification.md (R4.8).
+    metadata:
+      category: security
+      cwe: "CWE-88: Argument Injection"
+      module: "04-deep-link-verification"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              app.on('second-instance', ...)
+          - pattern-inside: |
+              app.on('open-url', ...)
+      - pattern-either:
+          - pattern: $WIN.loadURL($X)
+          - pattern: shell.openExternal($X)
+          - pattern: shell.openPath($X)
+          - pattern: $CP.execFile($X, ...)
+          - pattern: $ARGV[$I]
+
+  - id: avs-oauth-embedded-webview
+    languages: [javascript, typescript, dart, swift, kotlin, java]
+    severity: WARNING
+    message: >-
+      OAuth or login flow rendered in an embedded WebView. An embedded WebView lets the host
+      application read the credentials as they are typed, which is why identity providers block
+      it, and it breaks the isolation that makes PKCE meaningful. Use
+      ASWebAuthenticationSession on iOS and Chrome Custom Tabs on Android.
+      See modules/04-deep-link-verification.md (R4.2).
+    metadata:
+      category: security
+      cwe: "CWE-1021: Improper Restriction of Rendered UI Layers"
+      masvs: "MASVS-AUTH-1"
+      module: "04-deep-link-verification"
+      confidence: LOW
+    pattern-regex: '(?i)(WebView|WKWebView|InAppWebView)[^\n]{0,120}(oauth|authorize|login|signin|sign-in|auth/)'
+
+  # ==========================================================================
+  # MODULE 05 — SUPPLY CHAIN AND BUILD INTEGRITY
+  # ==========================================================================
+
+  - id: avs-update-feed-cleartext
+    languages: [javascript, typescript, generic]
+    severity: ERROR
+    message: >-
+      Auto-update feed over cleartext HTTP. Any network position then becomes code execution on
+      every installation, delivered with the trust the user already granted your signed binary.
+      Use HTTPS and verify the package signature against a key compiled into the application
+      before executing it. See modules/05-build-integrity-and-updates.md (R5.5).
+    metadata:
+      category: security
+      cwe: "CWE-494: Download of Code Without Integrity Check"
+      module: "05-build-integrity-and-updates"
+      confidence: HIGH
+    pattern-regex: '(setFeedURL\s*\(\s*["'']?http://|url\s*:\s*["'']http://[^"'']*(update|release|latest|appcast))'
+
+  - id: avs-signing-material-in-repo
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Signing material committed to the repository. A keystore, certificate, or provisioning key
+      in version control lets anyone with repository access publish a build that the platform and
+      your users will trust. Remove it, revoke it, and move signing into the CI secret store or an
+      HSM. See modules/05-build-integrity-and-updates.md (R5.4).
+    metadata:
+      category: security
+      cwe: "CWE-522: Insufficiently Protected Credentials"
+      module: "05-build-integrity-and-updates"
+      confidence: HIGH
+    paths:
+      include:
+        - "*key.properties"
+        - "*keystore.properties"
+        - "*.gradle"
+    pattern-regex: '(?i)(storePassword|keyPassword|keyAlias|storeFile)\s*[=:]\s*["'']?[^\s"'']{3,}'

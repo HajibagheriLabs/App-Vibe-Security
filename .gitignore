@@ -1,0 +1,95 @@
+# ---------------------------------------------------------------------------
+# Local build directive — never published.
+# The distributable agent ruleset lives at configs/CLAUDE.md.
+# ---------------------------------------------------------------------------
+/CLAUDE.md
+
+# ---------------------------------------------------------------------------
+# Secrets — these patterns exist BEFORE any .env file does. See modules/03.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+*.cer
+*.certSigningRequest
+secrets.json
+credentials.json
+service-account*.json
+key.properties
+fastlane/report.xml
+fastlane/Appfile
+.envrc
+.direnv/
+
+# ---------------------------------------------------------------------------
+# Audit artifacts (scan output may contain extracted secrets — never commit)
+# ---------------------------------------------------------------------------
+/audit-out/
+/loot/
+*.sarif
+semgrep-results.json
+
+# ---------------------------------------------------------------------------
+# Node / JavaScript
+# ---------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-store/
+dist/
+build/
+out/
+release/
+.cache/
+
+# ---------------------------------------------------------------------------
+# React Native / Expo
+# ---------------------------------------------------------------------------
+.expo/
+.expo-shared/
+*.jsbundle
+ios/Pods/
+ios/build/
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+*.hprof
+
+# ---------------------------------------------------------------------------
+# Flutter / Dart
+# ---------------------------------------------------------------------------
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+*.g.dart.lock
+
+# ---------------------------------------------------------------------------
+# Native build output
+# ---------------------------------------------------------------------------
+*.apk
+*.aab
+*.ipa
+*.app
+*.dSYM.zip
+*.asar
+DerivedData/
+xcuserdata/
+
+# ---------------------------------------------------------------------------
+# Editor / OS
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

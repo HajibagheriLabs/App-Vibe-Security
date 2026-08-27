@@ -1,0 +1,21 @@
+# Normalise line endings in the repository to LF.
+* text=auto eol=lf
+
+# Executable scripts must keep LF endings on every platform — a CRLF shebang
+# fails to execute on Linux and macOS.
+*.mjs   text eol=lf
+*.sh    text eol=lf
+
+# Rule and config files are consumed by tools that treat them as plain text.
+*.md            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+.cursorrules    text eol=lf
+.windsurfrules  text eol=lf
+
+# Binary artifacts, if any ever land here, are never diffed or normalised.
+*.png binary
+*.jpg binary
+*.apk binary
+*.ipa binary
+*.asar binary

@@ -1,0 +1,84 @@
+# App-Vibe-Security — pre-commit hooks for native applications
+#
+# Copy to .pre-commit-config.yaml in your app repository, then:
+#   pip install pre-commit && pre-commit install
+#
+# These hooks run before the commit exists. A secret caught here never enters
+# history — which matters, because a credential that reaches history is public
+# and must be rotated, not deleted. See modules/03-binary-trust-and-gateways.md (R3.7).
+#
+# Every hook is pinned to an exact revision (R5.2).
+
+repos:
+  # ---------------------------------------------------------------------------
+  # Secret detection — the highest-value hook in this file
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.28.0
+    hooks:
+      - id: gitleaks
+        name: gitleaks — block credentials before they enter history
+
+  # ---------------------------------------------------------------------------
+  # Native application ruleset
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/semgrep/semgrep
+    rev: v1.145.0
+    hooks:
+      - id: semgrep
+        name: semgrep — native application security rules
+        args:
+          - --config=skills/semgrep-rules.yml
+          - --error
+          - --severity=ERROR
+          - --skip-unknown-extensions
+          - --metrics=off
+          - --quiet
+
+  # ---------------------------------------------------------------------------
+  # Configuration and manifest audit (no network required)
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: audit-native
+        name: audit-native — manifests, plists, build config, Electron packaging
+        entry: node scripts/audit-native.mjs .
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      # Registry verification needs the network, so it is opt-in per commit:
+      #   SKIP=verify-deps git commit ...     to skip
+      - id: verify-deps
+        name: verify-deps — confirm every declared package exists in its registry
+        entry: node scripts/audit-native.mjs . --check-deps --quiet
+        language: system
+        pass_filenames: false
+        files: '(package\.json|pubspec\.yaml|Podfile|build\.gradle)$'
+
+  # ---------------------------------------------------------------------------
+  # Generic guards — cheap, and they catch the accidents
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ['--maxkb=2048']
+      - id: check-merge-conflict
+      - id: check-json
+      - id: check-yaml
+        args: ['--allow-multiple-documents']
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  # ---------------------------------------------------------------------------
+  # Refuse to commit signing material at all
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: no-signing-material
+        name: block keystores, certificates, and provisioning profiles
+        entry: bash -c 'echo "Signing material must never be committed. Move it to the CI secret store or an HSM (R5.4)."; exit 1'
+        language: system
+        files: '\.(jks|keystore|p12|pfx|p8|mobileprovision|cer)$|(^|/)key\.properties$'

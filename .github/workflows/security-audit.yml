@@ -1,0 +1,171 @@
+# App-Vibe-Security — native application security gate
+#
+# Copy to .github/workflows/security-audit.yml in your app repository.
+#
+# Actions are pinned by commit SHA, not by tag. A moving tag is a supply chain
+# vulnerability with a friendly name — see modules/05-build-integrity-and-updates.md (R5.6).
+
+name: Security Audit
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'   # Monday — catches newly disclosed dependency issues
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Deterministic source analysis. Fails the build on any ERROR finding.
+  # ---------------------------------------------------------------------------
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0        # full history so the secret sweep can see it
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Semgrep
+        run: pip install "semgrep==1.145.0"    # pinned exactly — see R5.2
+
+      - name: Semgrep — native application ruleset
+        run: semgrep --config skills/semgrep-rules.yml --error --severity ERROR --metrics off .
+
+      - name: Native configuration audit
+        run: node scripts/audit-native.mjs . --no-color
+
+      - name: Electron-specific analysis
+        run: |
+          if [ -f package.json ] && grep -q '"electron"' package.json; then
+            npx --yes @doyensec/electronegativity -i . -l 2
+          else
+            echo "No Electron target detected — skipping."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Dependency existence and provenance. Roughly 1 in 5 model-suggested packages
+  # does not exist, and attackers pre-register the recurring names.
+  # ---------------------------------------------------------------------------
+  supply-chain:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Verify every declared dependency exists in its registry
+        run: node scripts/audit-native.mjs . --check-deps --no-color
+
+      - name: Lockfile is authoritative
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts --dry-run
+          else
+            echo "No package-lock.json — commit one (R5.2)." && exit 1
+          fi
+
+      - name: Known vulnerabilities
+        run: npm audit --audit-level=high || true   # advisory; tighten once the baseline is clean
+
+  # ---------------------------------------------------------------------------
+  # Secret sweep across the working tree AND the full git history. A credential
+  # that ever landed in history is public — rotation is the remediation.
+  # ---------------------------------------------------------------------------
+  secret-sweep:
+    name: Secret sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks — working tree and history
+        run: |
+          curl -sSL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks detect --source . --redact --exit-code 1
+
+  # ---------------------------------------------------------------------------
+  # Scan what you actually ship. Source scanning misses build-time injection.
+  # Wire this to your real build outputs — the paths below are the common ones.
+  # ---------------------------------------------------------------------------
+  artifact-scan:
+    name: Shipped artifact scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      # Replace with this project's real release build.
+      #   React Native:  cd android && ./gradlew assembleRelease
+      #   Flutter:       flutter build apk --release --obfuscate --split-debug-info=build/symbols
+      #   Electron:      npm run build && npx electron-builder --publish never
+      - name: Build release artifact
+        run: echo "TODO — wire this to the project release build, then delete this line."
+
+      - name: Scan the artifact for credentials and debug material
+        run: |
+          for f in $(find . -maxdepth 6 \( -name '*.apk' -o -name '*.aab' -o -name '*.ipa' -o -name 'app.asar' \) 2>/dev/null); do
+            echo "::group::$f"
+            node scripts/scan-artifacts.mjs "$f" --no-color
+            echo "::endgroup::"
+          done
+
+  # ---------------------------------------------------------------------------
+  # Reminder that automation is a floor. The adversarial review in
+  # skills/audit-prompt.md is the ceiling, and human review is mandatory for the
+  # modules named in R5.7.
+  # ---------------------------------------------------------------------------
+  review-gate:
+    name: Human review reminder
+    runs-on: ubuntu-latest
+    needs: [static-analysis, supply-chain, secret-sweep]
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: High-impact modules require expert review
+        run: |
+          echo "Deterministic checks passed. They do not cover design errors."
+          echo "Manual expert review remains mandatory for:"
+          echo "  - authentication and session flows"
+          echo "  - payment and entitlement logic"
+          echo "  - key management and cryptographic code"
+          echo "  - native system interfaces, IPC handlers, and preload scripts"
+          echo "  - the build, signing, and update pipeline"
+          echo "Run the adversarial audit: skills/audit-prompt.md"
